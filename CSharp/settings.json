@@ -1,0 +1,19 @@
+{
+  "InputFolder": "C:\\Work\\入荷\\受信",
+  "ProcessedFolder": "C:\\Work\\入荷\\受信\\処理済",
+  "SheetName": "",
+  "HeaderRow": 1,
+
+  "OutputColumns": [ "オーダー番号", "品番", "品名", "数量", "入荷予定日" ],
+  "OrderNoColumn": "オーダー番号",
+
+  "OrderRootFolder": "C:\\Work\\入荷\\オーダー",
+  "CreateOrderFolderIfMissing": true,
+  "SplitFileNameFormat": "{order}_{timestamp}.csv",
+
+  "PlanFileName": "入荷予定.csv",
+  "KeyColumns": [ "オーダー番号", "品番" ],
+
+  "CsvEncoding": "shift_jis",
+  "BackupPlanFile": true
+}

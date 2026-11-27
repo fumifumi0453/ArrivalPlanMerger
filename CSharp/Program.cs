@@ -41,6 +41,10 @@ public sealed class Settings
     public string LastUpdatedColumn { get; set; } = "最終更新日";
     /// <summary>最終更新日の書式</summary>
     public string LastUpdatedFormat { get; set; } = "yyyy/MM/dd HH:mm:ss";
+    /// <summary>状態の列名（無ければ最後の列に追加）</summary>
+    public string StatusColumn { get; set; } = "状態";
+    /// <summary>今回のマージで更新しなかった行の状態の列に入れる文字</summary>
+    public string CompletedText { get; set; } = "完納";
     /// <summary>今回のマージで更新しなかった行の背景色（"#RRGGBB"。空なら色を付けない）</summary>
     public string UntouchedRowColor { get; set; } = "#D9D9D9";
     /// <summary>同じ行とみなす列。空なら全列一致で判定</summary>
@@ -327,18 +331,26 @@ internal static class Program
         if (plan.IndexOf(lastUpdatedCol) < 0)
             plan.Header.Add(lastUpdatedCol);
         int lastUpdatedIdx = plan.IndexOf(lastUpdatedCol);
+
+        // 状態の列（今回更新しなかった行に「完納」を入れる）が無ければ最後の列に追加する
+        string statusCol = s.StatusColumn;
+        if (plan.IndexOf(statusCol) < 0)
+            plan.Header.Add(statusCol);
+        int statusIdx = plan.IndexOf(statusCol);
+
         foreach (var r in plan.Rows)
             while (r.Count < plan.Header.Count) r.Add("");
 
-        // 入荷予定ファイルの列順に合わせるための対応表（最終更新日は取り込み対象外）
-        var map = plan.Header.Select((h, i) => i == lastUpdatedIdx ? -1 : incoming.IndexOf(h)).ToArray();
+        // 入荷予定ファイルの列順に合わせるための対応表（最終更新日・状態は取り込み対象外）
+        var map = plan.Header.Select((h, i) =>
+            i == lastUpdatedIdx || i == statusIdx ? -1 : incoming.IndexOf(h)).ToArray();
         var missing = incoming.Header.Where(h => plan.IndexOf(h) < 0).ToList();
         if (missing.Count > 0)
             Log($"[警告] 入荷予定ファイルに無い列は取り込みません: {string.Join(", ", missing)}");
 
         var keyCols = s.KeyColumns.Count > 0
             ? s.KeyColumns
-            : plan.Header.Where(h => h != lastUpdatedCol).ToList();
+            : plan.Header.Where(h => h != lastUpdatedCol && h != statusCol).ToList();
         var keyIdx = keyCols.Select(k =>
         {
             int i = plan.IndexOf(k);
@@ -384,6 +396,10 @@ internal static class Program
                 added++;
             }
         }
+
+        // 今回更新しなかった行は「完納」、更新した行は空にする
+        for (int i = 0; i < plan.Rows.Count; i++)
+            plan.Rows[i][statusIdx] = touched.Contains(i) ? "" : s.CompletedText;
 
         WritePlanXlsx(planPath, plan, s.PlanSheetName, touched, s.UntouchedRowColor);
         return (added, updated);

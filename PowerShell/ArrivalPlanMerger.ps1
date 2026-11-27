@@ -55,6 +55,9 @@ $Config = @{
     # 最後の列に追加する最終更新日（行を追加・上書きしたときに現在時刻を入れる）
     LastUpdatedColumn = '最終更新日'
     LastUpdatedFormat = 'yyyy/MM/dd HH:mm:ss'
+    # 最後の列に追加する状態の列。今回のマージで更新しなかった行に CompletedText を入れ、更新した行は空にする
+    StatusColumn     = '状態'
+    CompletedText    = '完納'
     # 今回のマージで更新しなかった行の背景色（'#RRGGBB'。'' なら色を付けない）
     UntouchedRowColor = '#D9D9D9'
     # 同じ行とみなす列（@() なら全列一致で判定）
@@ -333,16 +336,23 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
         foreach ($r in $planRows) { $r | Add-Member -NotePropertyName $lastCol -NotePropertyValue '' -Force }
     }
 
+    # 状態の列が無ければ最後の列に追加する
+    $statusCol = $Config.StatusColumn
+    if ($planCols -notcontains $statusCol) {
+        $planCols += $statusCol
+        foreach ($r in $planRows) { $r | Add-Member -NotePropertyName $statusCol -NotePropertyValue '' -Force }
+    }
+
     $missing = @($Config.OutputColumns | Where-Object { $planCols -notcontains $_ })
     if ($missing.Count -gt 0) {
         Write-Log ('  [警告] 入荷予定ファイルに無い列は取り込みません: ' + ($missing -join ', '))
     }
 
-    # 取り込む列（入荷予定ファイルにあって、新しいファイルにもある列。最終更新日は除く）
-    $copyCols = @($planCols | Where-Object { $_ -ne $lastCol -and $Config.OutputColumns -contains $_ })
+    # 取り込む列（入荷予定ファイルにあって、新しいファイルにもある列。最終更新日・状態は除く）
+    $copyCols = @($planCols | Where-Object { $_ -ne $lastCol -and $_ -ne $statusCol -and $Config.OutputColumns -contains $_ })
 
     $keyCols = if (@($Config.KeyColumns).Count -gt 0) { $Config.KeyColumns }
-               else { @($planCols | Where-Object { $_ -ne $lastCol }) }
+               else { @($planCols | Where-Object { $_ -ne $lastCol -and $_ -ne $statusCol }) }
     foreach ($k in $keyCols) {
         if ($planCols -notcontains $k) { throw "入荷予定ファイルにキー列「$k」がありません: $PlanPath" }
     }
@@ -376,6 +386,11 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
             $touched[$index[$key]] = $true
             $added++
         }
+    }
+
+    # 今回更新しなかった行は「完納」、更新した行は空にする
+    for ($i = 0; $i -lt $planRows.Count; $i++) {
+        $planRows[$i].$statusCol = if ($touched.ContainsKey($i)) { '' } else { $Config.CompletedText }
     }
 
     Save-PlanXlsx $PlanPath $planCols $planRows $touched

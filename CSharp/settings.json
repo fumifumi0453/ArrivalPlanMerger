@@ -38,5 +38,9 @@
   "OldFolder": "old",
 
   "CsvEncoding": "shift_jis",
-  "BackupPlanFile": true
+  "BackupPlanFile": true,
+
+  // ログの保存日数（古いログは削除。0 なら削除しない）と、1ファイルの上限サイズ(KB)
+  "LogRetentionDays": 30,
+  "LogMaxSizeKB": 1024
 }

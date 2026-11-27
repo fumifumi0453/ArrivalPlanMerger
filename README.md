@@ -34,4 +34,4 @@
 - 分割ファイルの CSV は Shift_JIS / CRLF
 - マージ前に `入荷予定.xlsx.bak` を作成
 - 入荷予定ファイルを Excel で開いたままだと保存できずエラーになります
-- ログは `logs\yyyyMMdd.log`
+- ログは `logs\yyyyMMdd.log`（既定で30日より古いログは削除、1ファイル1MBを超えたら `_1`, `_2` … に切り替え）

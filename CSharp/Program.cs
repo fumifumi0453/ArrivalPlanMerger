@@ -52,6 +52,11 @@ public sealed class Settings
 
     /// <summary>CSVの文字コード（shift_jis / utf-8 / utf-8-bom）</summary>
     public string CsvEncoding { get; set; } = "shift_jis";
+    /// <summary>ログの保存日数（これより古いログは削除。0 なら削除しない）</summary>
+    public int LogRetentionDays { get; set; } = 30;
+    /// <summary>1ファイルあたりのログの上限サイズ(KB)。超えたら _1, _2 … に切り替える（0 なら無制限）</summary>
+    public int LogMaxSizeKB { get; set; } = 1024;
+
     /// <summary>マージ前に入荷予定ファイルの .bak を作るか</summary>
     public bool BackupPlanFile { get; set; } = true;
 }
@@ -108,13 +113,21 @@ internal static class Program
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
         string settingsPath = args.Length > 0 ? args[0] : Path.Combine(AppContext.BaseDirectory, "settings.json");
-        string logPath = Path.Combine(AppContext.BaseDirectory, "logs", $"{DateTime.Now:yyyyMMdd}.log");
-        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-        _log = new StreamWriter(logPath, append: true, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
 
         try
         {
-            var settings = LoadSettings(settingsPath);
+            Settings settings;
+            try
+            {
+                settings = LoadSettings(settingsPath);
+            }
+            finally
+            {
+                // 設定が読めなかったときも既定値でログを開いてエラーを残す
+                var logSettings = new Settings();
+                try { logSettings = LoadSettingsRaw(settingsPath); } catch { }
+                OpenLog(logSettings.LogRetentionDays, logSettings.LogMaxSizeKB);
+            }
             var encoding = GetEncoding(settings.CsvEncoding);
 
             var excelFiles = Directory.GetFiles(settings.InputFolder, "*.xlsx")
@@ -586,11 +599,16 @@ internal static class Program
         File.Move(file, dest);
     }
 
-    private static Settings LoadSettings(string path)
+    private static Settings LoadSettingsRaw(string path)
     {
         var json = File.ReadAllText(path, Encoding.UTF8);
         var opt = new JsonSerializerOptions { ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
-        var s = JsonSerializer.Deserialize<Settings>(json, opt) ?? throw new InvalidOperationException("settings.json が読めません。");
+        return JsonSerializer.Deserialize<Settings>(json, opt) ?? throw new InvalidOperationException("settings.json が読めません。");
+    }
+
+    private static Settings LoadSettings(string path)
+    {
+        var s = LoadSettingsRaw(path);
         if (s.OutputColumns.Count == 0) throw new InvalidOperationException("OutputColumns が空です。");
 
         // 相対パスは exe を実行したときのカレントフォルダを基準に絶対パスへ変換する
@@ -622,10 +640,51 @@ internal static class Program
         return name;
     }
 
+    // ログを開く前に出したメッセージ（開いたときにまとめて書く）
+    private static readonly List<string> _pendingLog = new();
+
     private static void Log(string message)
     {
         string line = $"{DateTime.Now:yyyy/MM/dd HH:mm:ss} {message}";
         Console.WriteLine(line);
-        _log?.WriteLine(line);
+        if (_log != null) _log.WriteLine(line);
+        else _pendingLog.Add(line);
+    }
+
+    /// <summary>
+    /// ログファイルを開く。
+    /// ・保存日数より古いログは削除する
+    /// ・その日のログが上限サイズを超えていたら yyyyMMdd_1.log, _2.log … に切り替える
+    /// </summary>
+    private static void OpenLog(int retentionDays, int maxSizeKB)
+    {
+        string dir = Path.Combine(AppContext.BaseDirectory, "logs");
+        Directory.CreateDirectory(dir);
+
+        var deleted = new List<string>();
+        if (retentionDays > 0)
+        {
+            var limit = DateTime.Now.Date.AddDays(-retentionDays);
+            foreach (var f in Directory.GetFiles(dir, "*.log"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTime(f) < limit) { File.Delete(f); deleted.Add(Path.GetFileName(f)); }
+                }
+                catch { /* 消せないログは次回に回す */ }
+            }
+        }
+
+        string baseName = DateTime.Now.ToString("yyyyMMdd");
+        string path = Path.Combine(dir, baseName + ".log");
+        long maxBytes = maxSizeKB > 0 ? maxSizeKB * 1024L : long.MaxValue;
+        for (int n = 1; File.Exists(path) && new FileInfo(path).Length >= maxBytes; n++)
+            path = Path.Combine(dir, $"{baseName}_{n}.log");
+
+        _log = new StreamWriter(path, append: true, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
+        foreach (var line in _pendingLog) _log.WriteLine(line);
+        _pendingLog.Clear();
+        if (deleted.Count > 0)
+            Log($"古いログを削除: {string.Join(", ", deleted)}");
     }
 }

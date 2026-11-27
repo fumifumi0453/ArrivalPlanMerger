@@ -65,6 +65,11 @@ $Config = @{
 
     # マージ前に入荷予定ファイルの .bak を作るか
     BackupPlanFile   = $true
+
+    # ログの保存日数（これより古いログは削除。0 なら削除しない）
+    LogRetentionDays = 30
+    # 1ファイルあたりのログの上限サイズ(KB)。超えたら _1, _2 … に切り替える（0 なら無制限）
+    LogMaxSizeKB     = 1024
 }
 # =====================================================================
 
@@ -76,13 +81,34 @@ $CsvEncoding = 'Default'
 
 $LogFolder = Join-Path $PSScriptRoot 'logs'
 New-Item -ItemType Directory -Path $LogFolder -Force | Out-Null
-$LogFile = Join-Path $LogFolder ((Get-Date -Format 'yyyyMMdd') + '.log')
+
+# 保存日数より古いログを削除する
+$deletedLogs = @()
+if ($Config.LogRetentionDays -gt 0) {
+    $limit = (Get-Date).Date.AddDays(-$Config.LogRetentionDays)
+    foreach ($oldLog in @(Get-ChildItem -Path $LogFolder -Filter '*.log' -File | Where-Object { $_.LastWriteTime -lt $limit })) {
+        try { Remove-Item $oldLog.FullName -Force; $deletedLogs += $oldLog.Name } catch { }   # 消せないログは次回に回す
+    }
+}
+
+# その日のログが上限サイズを超えていたら yyyyMMdd_1.log, _2.log … に切り替える
+$logBase = Get-Date -Format 'yyyyMMdd'
+$LogFile = Join-Path $LogFolder "$logBase.log"
+if ($Config.LogMaxSizeKB -gt 0) {
+    $n = 1
+    while ((Test-Path $LogFile) -and (Get-Item $LogFile).Length -ge ($Config.LogMaxSizeKB * 1KB)) {
+        $LogFile = Join-Path $LogFolder ("{0}_{1}.log" -f $logBase, $n)
+        $n++
+    }
+}
 
 function Write-Log([string]$Message) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy/MM/dd HH:mm:ss'), $Message
     Write-Host $line
     Add-Content -Path $LogFile -Value $line -Encoding UTF8
 }
+
+if ($deletedLogs.Count -gt 0) { Write-Log ('古いログを削除: ' + ($deletedLogs -join ', ')) }
 
 function Get-SafeName([string]$Name) {
     foreach ($c in [IO.Path]::GetInvalidFileNameChars()) { $Name = $Name.Replace($c, '_') }

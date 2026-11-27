@@ -41,7 +41,7 @@ public sealed class Settings
     public string LastUpdatedColumn { get; set; } = "最終更新日";
     /// <summary>最終更新日の書式</summary>
     public string LastUpdatedFormat { get; set; } = "yyyy/MM/dd HH:mm:ss";
-    /// <summary>状態の列名（無ければ最後の列に追加）</summary>
+    /// <summary>状態の列名（無ければ先頭の列に追加）</summary>
     public string StatusColumn { get; set; } = "状態";
     /// <summary>今回のマージで更新しなかった行の状態の列に入れる文字</summary>
     public string CompletedText { get; set; } = "完納";
@@ -326,17 +326,20 @@ internal static class Program
         if (plan.Header.Count == 0)
             plan.Header.AddRange(incoming.Header);
 
+        // 状態の列（今回更新しなかった行に「完納」を入れる）が無ければ先頭の列に追加する
+        string statusCol = s.StatusColumn;
+        if (plan.IndexOf(statusCol) < 0)
+        {
+            plan.Header.Insert(0, statusCol);
+            foreach (var r in plan.Rows) r.Insert(0, "");
+        }
+        int statusIdx = plan.IndexOf(statusCol);
+
         // 最終更新日の列が無ければ最後の列に追加する
         string lastUpdatedCol = s.LastUpdatedColumn;
         if (plan.IndexOf(lastUpdatedCol) < 0)
             plan.Header.Add(lastUpdatedCol);
         int lastUpdatedIdx = plan.IndexOf(lastUpdatedCol);
-
-        // 状態の列（今回更新しなかった行に「完納」を入れる）が無ければ最後の列に追加する
-        string statusCol = s.StatusColumn;
-        if (plan.IndexOf(statusCol) < 0)
-            plan.Header.Add(statusCol);
-        int statusIdx = plan.IndexOf(statusCol);
 
         foreach (var r in plan.Rows)
             while (r.Count < plan.Header.Count) r.Add("");

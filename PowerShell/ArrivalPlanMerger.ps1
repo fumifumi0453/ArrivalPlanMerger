@@ -55,7 +55,7 @@ $Config = @{
     # 最後の列に追加する最終更新日（行を追加・上書きしたときに現在時刻を入れる）
     LastUpdatedColumn = '最終更新日'
     LastUpdatedFormat = 'yyyy/MM/dd HH:mm:ss'
-    # 最後の列に追加する状態の列。今回のマージで更新しなかった行に CompletedText を入れ、更新した行は空にする
+    # 先頭の列に追加する状態の列。今回のマージで更新しなかった行に CompletedText を入れ、更新した行は空にする
     StatusColumn     = '状態'
     CompletedText    = '完納'
     # 今回のマージで更新しなかった行の背景色（'#RRGGBB'。'' なら色を付けない）
@@ -336,10 +336,10 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
         foreach ($r in $planRows) { $r | Add-Member -NotePropertyName $lastCol -NotePropertyValue '' -Force }
     }
 
-    # 状態の列が無ければ最後の列に追加する
+    # 状態の列が無ければ先頭の列に追加する
     $statusCol = $Config.StatusColumn
     if ($planCols -notcontains $statusCol) {
-        $planCols += $statusCol
+        $planCols = @($statusCol) + $planCols
         foreach ($r in $planRows) { $r | Add-Member -NotePropertyName $statusCol -NotePropertyValue '' -Force }
     }
 

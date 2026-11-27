@@ -14,6 +14,8 @@
 
 - Excel 不要（ClosedXML で直接読み込み）
 - 設定は `settings.json`
+- `settings.json` のパスは、exe を実行したときのカレントフォルダからの相対パスでも指定できます
+  （タスクスケジューラで実行する場合は「開始（オプション）」にフォルダを指定してください）
 - 発行（フォルダー）すると、ランタイム不要の単一 exe（win-x64）ができます
 - 実行先には `ArrivalPlanMerger.exe` と `settings.json` をコピー
 

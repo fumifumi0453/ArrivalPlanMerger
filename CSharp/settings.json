@@ -1,6 +1,7 @@
 {
-  "InputFolder": "C:\\Work\\入荷\\受信",
-  "ProcessedFolder": "C:\\Work\\入荷\\受信\\処理済",
+  // パスは絶対パスでも、exe を実行したときのカレントフォルダからの相対パスでも書ける
+  "InputFolder": "受信",
+  "ProcessedFolder": "受信\\処理済",
   "SheetName": "",
   "HeaderRow": 1,
 
@@ -14,14 +15,16 @@
     { "Column": "区分", "Operator": "In", "Values": [ "入荷", "追加" ] }
   ],
 
-  "OrderRootFolder": "C:\\Work\\入荷\\オーダー",
+  "OrderRootFolder": "オーダー",
   "CreateOrderFolderIfMissing": true,
   "SplitFileNameFormat": "{order}_{timestamp}.csv",
 
   "PlanFileName": "入荷予定.csv",
   "KeyColumns": [ "オーダー番号", "品番" ],
 
-  // マージに使った分割CSVの移動先（相対パスなら各オーダーフォルダの中）
+  // マージに使った分割CSVの移動先
+  //   "old"      → 各オーダーフォルダの中の old
+  //   ".\\old"   → カレントフォルダの old\オーダー番号
   "OldFolder": "old",
 
   "CsvEncoding": "shift_jis",

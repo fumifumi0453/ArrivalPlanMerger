@@ -30,7 +30,7 @@ public sealed class Settings
     public bool CreateOrderFolderIfMissing { get; set; } = true;
     /// <summary>分割CSVのファイル名。{order} と {timestamp} が使える</summary>
     public string SplitFileNameFormat { get; set; } = "{order}_{timestamp}.csv";
-    /// <summary>マージに使った分割CSVの移動先。相対パスならオーダー別フォルダからの相対</summary>
+    /// <summary>マージに使った分割CSVの移動先。フォルダ名だけなら各オーダーフォルダの中、パス指定ならカレントフォルダ基準</summary>
     public string OldFolder { get; set; } = "old";
 
     /// <summary>各オーダーフォルダ内の入荷予定ファイル名</summary>
@@ -452,8 +452,22 @@ internal static class Program
         var opt = new JsonSerializerOptions { ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
         var s = JsonSerializer.Deserialize<Settings>(json, opt) ?? throw new InvalidOperationException("settings.json が読めません。");
         if (s.OutputColumns.Count == 0) throw new InvalidOperationException("OutputColumns が空です。");
+
+        // 相対パスは exe を実行したときのカレントフォルダを基準に絶対パスへ変換する
+        string baseDir = Environment.CurrentDirectory;
+        Log($"カレントフォルダ: {baseDir}");
+        s.InputFolder     = ToFullPath(s.InputFolder, baseDir);
+        s.ProcessedFolder = ToFullPath(s.ProcessedFolder, baseDir);
+        s.OrderRootFolder = ToFullPath(s.OrderRootFolder, baseDir);
+        // OldFolder は「フォルダ名だけ」なら各オーダーフォルダの中、
+        // それ以外の相対パス（.\old や ..\old など）はカレントフォルダ基準
+        if (!string.IsNullOrWhiteSpace(s.OldFolder) && s.OldFolder.IndexOfAny(new[] { '\\', '/' }) >= 0)
+            s.OldFolder = ToFullPath(s.OldFolder, baseDir);
         return s;
     }
+
+    private static string ToFullPath(string path, string baseDir) =>
+        string.IsNullOrWhiteSpace(path) ? path : Path.GetFullPath(path, baseDir);
 
     private static Encoding GetEncoding(string name) => name.ToLowerInvariant() switch
     {

@@ -55,20 +55,24 @@ public sealed class RowFilter
     public string Value { get; set; } = "";
     public List<string> Values { get; set; } = new();
 
+    private const StringComparison IgnoreCase = StringComparison.OrdinalIgnoreCase;
+
     public bool IsMatch(string cell)
     {
         cell = (cell ?? "").Trim();
         return Operator.ToLowerInvariant() switch
         {
-            "equals"      => cell == Value,
-            "notequals"   => cell != Value,
-            "contains"    => cell.Contains(Value),
-            "notcontains" => !cell.Contains(Value),
-            "in"          => Values.Contains(cell),
-            "notin"       => !Values.Contains(cell),
+            // 大文字・小文字は区別しない
+            "equals"      => string.Equals(cell, Value, IgnoreCase),
+            "notequals"   => !string.Equals(cell, Value, IgnoreCase),
+            "contains"    => cell.Contains(Value, IgnoreCase),
+            "notcontains" => !cell.Contains(Value, IgnoreCase),
+            "in"          => Values.Any(v => string.Equals(cell, v.Trim(), IgnoreCase)),
+            "notin"       => !Values.Any(v => string.Equals(cell, v.Trim(), IgnoreCase)),
             "empty"       => cell.Length == 0,
             "notempty"    => cell.Length > 0,
-            "regex"       => System.Text.RegularExpressions.Regex.IsMatch(cell, Value),
+            "regex"       => System.Text.RegularExpressions.Regex.IsMatch(cell, Value,
+                                 System.Text.RegularExpressions.RegexOptions.IgnoreCase),
             _ => throw new InvalidOperationException($"RowFilters の Operator「{Operator}」は使えません。"),
         };
     }
@@ -164,7 +168,7 @@ internal static class Program
 
         var groups = trimmed.Rows
             .Where(r => !string.IsNullOrWhiteSpace(r[orderIdx]))
-            .GroupBy(r => r[orderIdx].Trim());
+            .GroupBy(r => r[orderIdx].Trim(), StringComparer.OrdinalIgnoreCase); // Windowsのフォルダ名と同じく大文字・小文字を区別しない
 
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
@@ -317,7 +321,8 @@ internal static class Program
             string.Join("\u001F", keyIdx.Select(i => i < row.Count ? row[i].Trim() : ""));
 
         // 既存行のキー → 行番号
-        var index = new Dictionary<string, int>();
+        // キーの比較は大文字・小文字を区別しない
+        var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < plan.Rows.Count; i++)
             index[KeyOf(plan.Rows[i])] = i;
 

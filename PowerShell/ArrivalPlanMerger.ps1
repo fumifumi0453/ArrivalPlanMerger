@@ -141,15 +141,16 @@ function Test-RowFilter($Row, $Filter) {
     $value = if ($Filter.ContainsKey('Value')) { [string]$Filter.Value } else { '' }
     $values = if ($Filter.ContainsKey('Values')) { @($Filter.Values) } else { @() }
     switch ($Filter.Operator) {
-        'Equals'      { return $cell -ceq $value }
-        'NotEquals'   { return $cell -cne $value }
-        'Contains'    { return $cell.Contains($value) }
-        'NotContains' { return -not $cell.Contains($value) }
-        'In'          { return $values -ccontains $cell }
-        'NotIn'       { return $values -cnotcontains $cell }
+        # 大文字・小文字は区別しない（-eq / -contains / -match は既定で区別しない）
+        'Equals'      { return $cell -eq $value }
+        'NotEquals'   { return $cell -ne $value }
+        'Contains'    { return $cell.IndexOf($value, [StringComparison]::OrdinalIgnoreCase) -ge 0 }
+        'NotContains' { return $cell.IndexOf($value, [StringComparison]::OrdinalIgnoreCase) -lt 0 }
+        'In'          { return $values -contains $cell }
+        'NotIn'       { return $values -notcontains $cell }
         'Empty'       { return $cell.Length -eq 0 }
         'NotEmpty'    { return $cell.Length -gt 0 }
-        'Regex'       { return $cell -cmatch $value }
+        'Regex'       { return $cell -match $value }
         default       { throw "RowFilters の Operator「$($Filter.Operator)」は使えません。" }
     }
 }
@@ -184,7 +185,7 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
         if ($planCols -notcontains $k) { throw "入荷予定ファイルにキー列「$k」がありません: $PlanPath" }
     }
 
-    # 既存行のキー → 行番号
+    # 既存行のキー → 行番号（PowerShell のハッシュテーブルは大文字・小文字を区別しない）
     $index = @{}
     for ($i = 0; $i -lt $planRows.Count; $i++) { $index[(Get-RowKey $planRows[$i] $keyCols)] = $i }
 

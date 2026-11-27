@@ -19,7 +19,12 @@
   "CreateOrderFolderIfMissing": true,
   "SplitFileNameFormat": "{order}_{timestamp}.csv",
 
-  "PlanFileName": "入荷予定.csv",
+  // 入荷予定ファイル（Excel）。同じ名前の .csv が既にあれば、初回にその内容を引き継ぐ
+  "PlanFileName": "入荷予定.xlsx",
+  "PlanSheetName": "入荷予定",
+  // 最後の列に追加する最終更新日（行を追加・変更したときに現在時刻を入れる）
+  "LastUpdatedColumn": "最終更新日",
+  "LastUpdatedFormat": "yyyy/MM/dd HH:mm:ss",
   "KeyColumns": [ "オーダー番号", "品番" ],
 
   // マージに使った分割CSVの移動先

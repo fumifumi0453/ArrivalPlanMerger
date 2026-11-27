@@ -33,8 +33,14 @@ public sealed class Settings
     /// <summary>マージに使った分割CSVの移動先。フォルダ名だけなら各オーダーフォルダの中、パス指定ならカレントフォルダ基準</summary>
     public string OldFolder { get; set; } = "old";
 
-    /// <summary>各オーダーフォルダ内の入荷予定ファイル名</summary>
-    public string PlanFileName { get; set; } = "入荷予定.csv";
+    /// <summary>各オーダーフォルダ内の入荷予定ファイル名（Excel）</summary>
+    public string PlanFileName { get; set; } = "入荷予定.xlsx";
+    /// <summary>入荷予定ファイルを新規作成するときのシート名</summary>
+    public string PlanSheetName { get; set; } = "入荷予定";
+    /// <summary>最終更新日の列名（無ければ最後の列に追加）</summary>
+    public string LastUpdatedColumn { get; set; } = "最終更新日";
+    /// <summary>最終更新日の書式</summary>
+    public string LastUpdatedFormat { get; set; } = "yyyy/MM/dd HH:mm:ss";
     /// <summary>同じ行とみなす列。空なら全列一致で判定</summary>
     public List<string> KeyColumns { get; set; } = new();
 
@@ -290,11 +296,18 @@ internal static class Program
     private static (int added, int updated) MergeIntoPlan(string planPath, Table incoming, Settings s, Encoding enc)
     {
         Table plan;
+        string csvPath = Path.ChangeExtension(planPath, ".csv");
         if (File.Exists(planPath))
         {
-            plan = ReadCsv(planPath, enc);
+            plan = ReadPlanXlsx(planPath);
             if (s.BackupPlanFile)
                 File.Copy(planPath, planPath + ".bak", overwrite: true);
+        }
+        else if (File.Exists(csvPath))
+        {
+            // 以前の CSV 版の入荷予定ファイルがあれば、その内容を引き継いで Excel にする
+            plan = ReadCsv(csvPath, enc);
+            Log($"CSV の入荷予定ファイルを Excel に移行: {csvPath} → {planPath}");
         }
         else
         {
@@ -303,13 +316,27 @@ internal static class Program
             Log($"入荷予定ファイルが無いため新規作成: {planPath}");
         }
 
-        // 入荷予定ファイルの列順に合わせるための対応表
-        var map = plan.Header.Select(h => incoming.IndexOf(h)).ToArray();
+        // 空のファイルなら新しいファイルの列で作る
+        if (plan.Header.Count == 0)
+            plan.Header.AddRange(incoming.Header);
+
+        // 最終更新日の列が無ければ最後の列に追加する
+        string lastUpdatedCol = s.LastUpdatedColumn;
+        if (plan.IndexOf(lastUpdatedCol) < 0)
+            plan.Header.Add(lastUpdatedCol);
+        int lastUpdatedIdx = plan.IndexOf(lastUpdatedCol);
+        foreach (var r in plan.Rows)
+            while (r.Count < plan.Header.Count) r.Add("");
+
+        // 入荷予定ファイルの列順に合わせるための対応表（最終更新日は取り込み対象外）
+        var map = plan.Header.Select((h, i) => i == lastUpdatedIdx ? -1 : incoming.IndexOf(h)).ToArray();
         var missing = incoming.Header.Where(h => plan.IndexOf(h) < 0).ToList();
         if (missing.Count > 0)
             Log($"[警告] 入荷予定ファイルに無い列は取り込みません: {string.Join(", ", missing)}");
 
-        var keyCols = s.KeyColumns.Count > 0 ? s.KeyColumns : plan.Header;
+        var keyCols = s.KeyColumns.Count > 0
+            ? s.KeyColumns
+            : plan.Header.Where(h => h != lastUpdatedCol).ToList();
         var keyIdx = keyCols.Select(k =>
         {
             int i = plan.IndexOf(k);
@@ -320,12 +347,12 @@ internal static class Program
         string KeyOf(List<string> row) =>
             string.Join("\u001F", keyIdx.Select(i => i < row.Count ? row[i].Trim() : ""));
 
-        // 既存行のキー → 行番号
-        // キーの比較は大文字・小文字を区別しない
+        // 既存行のキー → 行番号（大文字・小文字は区別しない）
         var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < plan.Rows.Count; i++)
             index[KeyOf(plan.Rows[i])] = i;
 
+        string now = DateTime.Now.ToString(s.LastUpdatedFormat);
         int added = 0, updated = 0;
         foreach (var inRow in incoming.Rows)
         {
@@ -334,24 +361,101 @@ internal static class Program
 
             if (index.TryGetValue(key, out int existing))
             {
-                // 新しいファイルに無い列は元の値を残す
+                // 新しいファイルに無い列（最終更新日を含む）は元の値を残す
                 var old = plan.Rows[existing];
                 for (int c = 0; c < row.Count; c++)
-                    if (map[c] < 0 && c < old.Count) row[c] = old[c];
+                    if (map[c] < 0) row[c] = old[c];
 
-                if (!old.SequenceEqual(row)) updated++;
-                plan.Rows[existing] = row;
+                // 内容が変わったときだけ上書きして最終更新日を更新する
+                if (!old.SequenceEqual(row))
+                {
+                    row[lastUpdatedIdx] = now;
+                    plan.Rows[existing] = row;
+                    updated++;
+                }
             }
             else
             {
+                row[lastUpdatedIdx] = now;
                 plan.Rows.Add(row);
                 index[key] = plan.Rows.Count - 1;
                 added++;
             }
         }
 
-        WriteCsv(planPath, plan, enc);
+        WritePlanXlsx(planPath, plan, s.PlanSheetName);
         return (added, updated);
+    }
+
+    // ---------------------------------------------------------------
+    // 入荷予定ファイル（Excel）の読み書き
+    // ---------------------------------------------------------------
+    private static Table ReadPlanXlsx(string path)
+    {
+        var table = new Table();
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var wb = new XLWorkbook(fs);
+        var ws = wb.Worksheet(1);
+
+        var lastCell = ws.LastCellUsed();
+        if (lastCell == null) return table;
+        int lastCol = ws.Row(1).LastCellUsed()?.Address.ColumnNumber ?? 0;
+        int lastRow = lastCell.Address.RowNumber;
+
+        for (int c = 1; c <= lastCol; c++)
+            table.Header.Add(ws.Cell(1, c).GetFormattedString().Trim());
+
+        for (int r = 2; r <= lastRow; r++)
+        {
+            var row = new List<string>(lastCol);
+            for (int c = 1; c <= lastCol; c++)
+                row.Add(ws.Cell(r, c).GetFormattedString());
+            if (row.All(string.IsNullOrWhiteSpace)) continue;
+            table.Rows.Add(row);
+        }
+        return table;
+    }
+
+    private static void WritePlanXlsx(string path, Table table, string sheetName)
+    {
+        // 既存ファイルがあれば開いて値だけ書き換える（列幅や色などの書式は残る）
+        bool isNew = !File.Exists(path);
+        using var wb = isNew ? new XLWorkbook() : OpenWorkbook(path);
+        var ws = isNew ? wb.Worksheets.Add(sheetName) : wb.Worksheet(1);
+
+        int cols = table.Header.Count;
+        int rows = table.Rows.Count + 1;
+
+        // 先頭の 0 が消えたり日付に化けたりしないよう、すべて文字列で書く
+        ws.Range(1, 1, rows, cols).Style.NumberFormat.Format = "@";
+
+        for (int c = 0; c < cols; c++)
+            ws.Cell(1, c + 1).Value = table.Header[c];
+        for (int r = 0; r < table.Rows.Count; r++)
+        {
+            var row = table.Rows[r];
+            for (int c = 0; c < cols; c++)
+                ws.Cell(r + 2, c + 1).Value = c < row.Count ? row[c] : "";
+        }
+
+        if (isNew)
+        {
+            ws.Row(1).Style.Font.Bold = true;
+            ws.SheetView.FreezeRows(1);
+            ws.Columns(1, cols).AdjustToContents();
+        }
+
+        // 一時ファイルに保存してから置き換える（途中で落ちても元ファイルが壊れない）
+        string tmp = path + ".tmp.xlsx";
+        wb.SaveAs(tmp);
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    private static XLWorkbook OpenWorkbook(string path)
+    {
+        // using で FileStream を閉じると保存できなくなるため、メモリに読み込んでから開く
+        var ms = new MemoryStream(File.ReadAllBytes(path));
+        return new XLWorkbook(ms);
     }
 
     // ---------------------------------------------------------------

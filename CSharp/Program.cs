@@ -41,6 +41,8 @@ public sealed class Settings
     public string LastUpdatedColumn { get; set; } = "最終更新日";
     /// <summary>最終更新日の書式</summary>
     public string LastUpdatedFormat { get; set; } = "yyyy/MM/dd HH:mm:ss";
+    /// <summary>今回のマージで更新しなかった行の背景色（"#RRGGBB"。空なら色を付けない）</summary>
+    public string UntouchedRowColor { get; set; } = "#D9D9D9";
     /// <summary>同じ行とみなす列。空なら全列一致で判定</summary>
     public List<string> KeyColumns { get; set; } = new();
 
@@ -353,6 +355,7 @@ internal static class Program
             index[KeyOf(plan.Rows[i])] = i;
 
         string now = DateTime.Now.ToString(s.LastUpdatedFormat);
+        var touched = new HashSet<int>();   // 今回追加・上書きした行
         int added = 0, updated = 0;
         foreach (var inRow in incoming.Rows)
         {
@@ -369,6 +372,7 @@ internal static class Program
                 // 内容が同じでも上書きし、最終更新日を更新する
                 row[lastUpdatedIdx] = now;
                 plan.Rows[existing] = row;
+                touched.Add(existing);
                 updated++;
             }
             else
@@ -376,11 +380,12 @@ internal static class Program
                 row[lastUpdatedIdx] = now;
                 plan.Rows.Add(row);
                 index[key] = plan.Rows.Count - 1;
+                touched.Add(plan.Rows.Count - 1);
                 added++;
             }
         }
 
-        WritePlanXlsx(planPath, plan, s.PlanSheetName);
+        WritePlanXlsx(planPath, plan, s.PlanSheetName, touched, s.UntouchedRowColor);
         return (added, updated);
     }
 
@@ -413,7 +418,8 @@ internal static class Program
         return table;
     }
 
-    private static void WritePlanXlsx(string path, Table table, string sheetName)
+    private static void WritePlanXlsx(string path, Table table, string sheetName,
+                                      HashSet<int> touched, string untouchedColor)
     {
         // 既存ファイルがあれば開いて値だけ書き換える（列幅や色などの書式は残る）
         bool isNew = !File.Exists(path);
@@ -433,6 +439,15 @@ internal static class Program
             var row = table.Rows[r];
             for (int c = 0; c < cols; c++)
                 ws.Cell(r + 2, c + 1).Value = c < row.Count ? row[c] : "";
+        }
+
+        // 今回更新しなかった行に色を付ける（更新した行は色を消す）
+        if (!string.IsNullOrWhiteSpace(untouchedColor))
+        {
+            var color = XLColor.FromHtml(untouchedColor);
+            for (int r = 0; r < table.Rows.Count; r++)
+                ws.Range(r + 2, 1, r + 2, cols).Style.Fill.BackgroundColor =
+                    touched.Contains(r) ? XLColor.NoColor : color;
         }
 
         if (isNew)

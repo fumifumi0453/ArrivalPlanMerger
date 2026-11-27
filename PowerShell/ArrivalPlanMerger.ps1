@@ -55,6 +55,8 @@ $Config = @{
     # 最後の列に追加する最終更新日（行を追加・上書きしたときに現在時刻を入れる）
     LastUpdatedColumn = '最終更新日'
     LastUpdatedFormat = 'yyyy/MM/dd HH:mm:ss'
+    # 今回のマージで更新しなかった行の背景色（'#RRGGBB'。'' なら色を付けない）
+    UntouchedRowColor = '#D9D9D9'
     # 同じ行とみなす列（@() なら全列一致で判定）
     KeyColumns       = @('オーダー番号', '品番')
 
@@ -186,7 +188,7 @@ function Read-PlanXlsx([string]$Path) {
     }
 }
 
-function Save-PlanXlsx([string]$Path, [string[]]$Cols, $Rows) {
+function Save-PlanXlsx([string]$Path, [string[]]$Cols, $Rows, [hashtable]$Touched) {
     $wb = $null; $ws = $null; $range = $null
     $isNew = -not (Test-Path $Path)
     try {
@@ -212,6 +214,25 @@ function Save-PlanXlsx([string]$Path, [string[]]$Cols, $Rows) {
         # 先頭の 0 が消えたり日付に化けたりしないよう、すべて文字列で書く
         $range.NumberFormat = '@'
         $range.Value2 = $arr
+
+        # 今回更新しなかった行に色を付ける（更新した行は色を消す）
+        # COM の呼び出し回数を減らすため、同じ状態が続く行はまとめて塗る
+        if ($Config.UntouchedRowColor) {
+            $hex = $Config.UntouchedRowColor.TrimStart('#')
+            $bgr = [Convert]::ToInt32($hex.Substring(0, 2), 16) +
+                   [Convert]::ToInt32($hex.Substring(2, 2), 16) * 256 +
+                   [Convert]::ToInt32($hex.Substring(4, 2), 16) * 65536
+            $start = 0
+            for ($r = 1; $r -le $rowList.Count; $r++) {
+                if ($r -lt $rowList.Count -and $Touched.ContainsKey($r) -eq $Touched.ContainsKey($start)) { continue }
+                # $start ～ $r-1 行目（データ行。シート上は +2 行目）が同じ状態
+                $band = $ws.Range($ws.Cells.Item($start + 2, 1), $ws.Cells.Item($r + 1, $Cols.Count))
+                if ($Touched.ContainsKey($start)) { $band.Interior.ColorIndex = -4142 }   # xlNone
+                else                              { $band.Interior.Color = $bgr }
+                Release-Com $band
+                $start = $r
+            }
+        }
 
         if ($isNew) {
             $ws.Rows.Item(1).Font.Bold = $true
@@ -331,6 +352,7 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
     for ($i = 0; $i -lt $planRows.Count; $i++) { $index[(Get-RowKey $planRows[$i] $keyCols)] = $i }
 
     $now = Get-Date -Format $Config.LastUpdatedFormat
+    $touched = @{}   # 今回追加・上書きした行番号
     $added = 0; $updated = 0
     foreach ($n in $NewRows) {
         $key = Get-RowKey $n $keyCols
@@ -340,6 +362,7 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
             $old = $planRows[$index[$key]]
             foreach ($c in $copyCols) { $old.$c = $n.$c }
             $old.$lastCol = $now
+            $touched[$index[$key]] = $true
             $updated++
         }
         else {
@@ -350,11 +373,12 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
             }
             $obj[$lastCol] = $now
             $index[$key] = $planRows.Add([pscustomobject]$obj)
+            $touched[$index[$key]] = $true
             $added++
         }
     }
 
-    Save-PlanXlsx $PlanPath $planCols $planRows
+    Save-PlanXlsx $PlanPath $planCols $planRows $touched
     return @($added, $updated)
 }
 

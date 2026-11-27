@@ -25,6 +25,8 @@
   // 最後の列に追加する最終更新日（行を追加・上書きしたときに現在時刻を入れる）
   "LastUpdatedColumn": "最終更新日",
   "LastUpdatedFormat": "yyyy/MM/dd HH:mm:ss",
+  // 今回のマージで更新しなかった行の背景色（"#RRGGBB"。"" なら色を付けない）
+  "UntouchedRowColor": "#D9D9D9",
   "KeyColumns": [ "オーダー番号", "品番" ],
 
   // マージに使った分割CSVの移動先

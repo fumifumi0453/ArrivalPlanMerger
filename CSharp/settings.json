@@ -7,12 +7,22 @@
   "OutputColumns": [ "オーダー番号", "品番", "品名", "数量", "入荷予定日" ],
   "OrderNoColumn": "オーダー番号",
 
+  // 残す行の条件（すべて満たす行だけ残す。[] なら全行）
+  // Operator: Equals / NotEquals / Contains / NotContains / In / NotIn / Empty / NotEmpty / Regex
+  "RowFilters": [
+    { "Column": "数量", "Operator": "NotEmpty" },
+    { "Column": "区分", "Operator": "In", "Values": [ "入荷", "追加" ] }
+  ],
+
   "OrderRootFolder": "C:\\Work\\入荷\\オーダー",
   "CreateOrderFolderIfMissing": true,
   "SplitFileNameFormat": "{order}_{timestamp}.csv",
 
   "PlanFileName": "入荷予定.csv",
   "KeyColumns": [ "オーダー番号", "品番" ],
+
+  // マージに使った分割CSVの移動先（相対パスなら各オーダーフォルダの中）
+  "OldFolder": "old",
 
   "CsvEncoding": "shift_jis",
   "BackupPlanFile": true

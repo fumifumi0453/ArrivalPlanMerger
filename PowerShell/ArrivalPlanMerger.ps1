@@ -4,10 +4,12 @@
 
   1. Excel を CSV にする
   2. 必要な列だけに加工する
-  3. オーダー番号でファイルを分ける
-  4. オーダー別フォルダに移動する
-  5. 各フォルダの入荷予定ファイルに新しい内容をマージする
+  3. 必要な行だけ抜き出す
+  4. オーダー番号でファイルを分ける
+  5. オーダー別フォルダに移動する
+  6. 各フォルダの入荷予定ファイルに新しい内容をマージする
      （キー列が同じ行があれば上書き、無ければ追加）
+  7. マージに使った新しいファイルをオールドフォルダに移動する
 
   動作環境: Windows PowerShell 5.1 / Excel がインストールされていること
 #>
@@ -30,12 +32,20 @@ $Config = @{
     # ファイル分割に使う列
     OrderNoColumn    = 'オーダー番号'
 
+    # 残す行の条件（すべて満たす行だけ残す。@() なら全行）
+    # Operator: Equals / NotEquals / Contains / NotContains / In / NotIn / Empty / NotEmpty / Regex
+    # 判定は元の全列で行うので、OutputColumns に無い列でも絞り込める
+    RowFilters       = @(
+        @{ Column = '数量'; Operator = 'NotEmpty' }
+        @{ Column = '区分'; Operator = 'In'; Values = @('入荷', '追加') }
+    )
+
     # オーダー別フォルダの親フォルダ（この下に「オーダー番号」名のフォルダ）
     OrderRootFolder  = 'C:\Work\入荷\オーダー'
     # オーダー別フォルダが無いとき作るか（$false ならスキップして警告）
     CreateOrderFolderIfMissing = $true
-    # 分割CSVを各フォルダに保存するか（履歴として残す）
-    SaveSplitFile    = $true
+    # マージに使った分割CSVの移動先（相対パスなら各オーダーフォルダの中）
+    OldFolder        = 'old'
 
     # 各オーダーフォルダ内の入荷予定ファイル名
     PlanFileName     = '入荷予定.csv'
@@ -126,6 +136,24 @@ function Get-CsvHeader([string]$Path) {
     return @($first -split ',' | ForEach-Object { $_.Trim().Trim('"') })
 }
 
+function Test-RowFilter($Row, $Filter) {
+    $cell = ([string]$Row.($Filter.Column)).Trim()
+    $value = if ($Filter.ContainsKey('Value')) { [string]$Filter.Value } else { '' }
+    $values = if ($Filter.ContainsKey('Values')) { @($Filter.Values) } else { @() }
+    switch ($Filter.Operator) {
+        'Equals'      { return $cell -ceq $value }
+        'NotEquals'   { return $cell -cne $value }
+        'Contains'    { return $cell.Contains($value) }
+        'NotContains' { return -not $cell.Contains($value) }
+        'In'          { return $values -ccontains $cell }
+        'NotIn'       { return $values -cnotcontains $cell }
+        'Empty'       { return $cell.Length -eq 0 }
+        'NotEmpty'    { return $cell.Length -gt 0 }
+        'Regex'       { return $cell -cmatch $value }
+        default       { throw "RowFilters の Operator「$($Filter.Operator)」は使えません。" }
+    }
+}
+
 function Get-RowKey($Row, [string[]]$KeyCols) {
     return ($KeyCols | ForEach-Object { ([string]$Row.$_).Trim() }) -join [char]0x1F
 }
@@ -208,18 +236,30 @@ function Invoke-OneExcel([string]$ExcelPath) {
 
     if ($rows.Count -eq 0) { Write-Log '  データ行がありません。'; return }
 
-    # ② 必要な列だけに加工する
     $srcCols = @($rows[0].PSObject.Properties.Name)
     foreach ($c in $Config.OutputColumns) {
         if ($srcCols -notcontains $c) { throw "Excel に列「$c」が見つかりません。" }
     }
+
+    # ③ 必要な行だけ抜き出す（元の全列で判定）
+    foreach ($f in @($Config.RowFilters)) {
+        if ($srcCols -notcontains $f.Column) { throw "抽出条件の列「$($f.Column)」が Excel に見つかりません。" }
+    }
+    $before = $rows.Count
+    foreach ($f in @($Config.RowFilters)) {
+        $rows = @($rows | Where-Object { Test-RowFilter $_ $f })
+    }
+    Write-Log "  行の抽出: $before 行 → $($rows.Count) 行"
+    if ($rows.Count -eq 0) { return }
+
+    # ② 必要な列だけに加工する
     if ($Config.OutputColumns -notcontains $Config.OrderNoColumn) {
         throw "オーダー番号列「$($Config.OrderNoColumn)」が OutputColumns に含まれていません。"
     }
     $rows = @($rows | Select-Object -Property $Config.OutputColumns |
               Where-Object { -not [string]::IsNullOrWhiteSpace($_.($Config.OrderNoColumn)) })
 
-    # ③ オーダー番号でファイルを分ける
+    # ④ オーダー番号でファイルを分ける
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $groups = $rows | Group-Object -Property { ([string]$_.($Config.OrderNoColumn)).Trim() }
 
@@ -227,7 +267,7 @@ function Invoke-OneExcel([string]$ExcelPath) {
         $order  = $g.Name
         $folder = Join-Path $Config.OrderRootFolder (Get-SafeName $order)
 
-        # ④ オーダー別フォルダに移動する
+        # ⑤ オーダー別フォルダに移動する
         if (-not (Test-Path $folder)) {
             if (-not $Config.CreateOrderFolderIfMissing) {
                 Write-Log "  [警告] フォルダが無いためスキップ: $folder"
@@ -237,15 +277,23 @@ function Invoke-OneExcel([string]$ExcelPath) {
             Write-Log "  フォルダ作成: $folder"
         }
 
-        if ($Config.SaveSplitFile) {
-            $splitPath = Join-Path $folder ("{0}_{1}.csv" -f (Get-SafeName $order), $timestamp)
-            Save-Csv $g.Group $Config.OutputColumns $splitPath
-        }
+        $splitName = "{0}_{1}.csv" -f (Get-SafeName $order), $timestamp
+        $splitPath = Join-Path $folder $splitName
+        Save-Csv $g.Group $Config.OutputColumns $splitPath
 
-        # ⑤ マージ
+        # ⑥ マージ
         $planPath = Join-Path $folder $Config.PlanFileName
         $result = Merge-Plan $planPath $g.Group
         Write-Log ("  オーダー {0}: 追加 {1} 行 / 上書き {2} 行" -f $order, $result[0], $result[1])
+
+        # ⑦ マージに使った新しいファイルをオールドフォルダに移動する
+        if ([IO.Path]::IsPathRooted($Config.OldFolder)) {
+            $oldFolder = Join-Path $Config.OldFolder (Get-SafeName $order)
+        } else {
+            $oldFolder = Join-Path $folder $Config.OldFolder
+        }
+        New-Item -ItemType Directory -Path $oldFolder -Force | Out-Null
+        Move-Item -Path $splitPath -Destination (Join-Path $oldFolder $splitName) -Force
     }
 }
 

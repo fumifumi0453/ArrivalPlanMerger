@@ -21,12 +21,17 @@ public sealed class Settings
     /// <summary>ファイル分割に使うオーダー番号の列名</summary>
     public string OrderNoColumn { get; set; } = "";
 
+    /// <summary>残す行の条件（すべて満たす行だけ残す。空なら全行）</summary>
+    public List<RowFilter> RowFilters { get; set; } = new();
+
     /// <summary>オーダー別フォルダの親フォルダ</summary>
     public string OrderRootFolder { get; set; } = "";
     /// <summary>オーダー別フォルダが無いとき作るか（falseならスキップして警告）</summary>
     public bool CreateOrderFolderIfMissing { get; set; } = true;
-    /// <summary>分割CSVのファイル名。{order} と {timestamp} が使える。空なら分割CSVを保存しない</summary>
+    /// <summary>分割CSVのファイル名。{order} と {timestamp} が使える</summary>
     public string SplitFileNameFormat { get; set; } = "{order}_{timestamp}.csv";
+    /// <summary>マージに使った分割CSVの移動先。相対パスならオーダー別フォルダからの相対</summary>
+    public string OldFolder { get; set; } = "old";
 
     /// <summary>各オーダーフォルダ内の入荷予定ファイル名</summary>
     public string PlanFileName { get; set; } = "入荷予定.csv";
@@ -37,6 +42,36 @@ public sealed class Settings
     public string CsvEncoding { get; set; } = "shift_jis";
     /// <summary>マージ前に入荷予定ファイルの .bak を作るか</summary>
     public bool BackupPlanFile { get; set; } = true;
+}
+
+/// <summary>行の抽出条件</summary>
+public sealed class RowFilter
+{
+    /// <summary>判定する列名（OutputColumns に無い列も指定可）</summary>
+    public string Column { get; set; } = "";
+    /// <summary>Equals / NotEquals / Contains / NotContains / In / NotIn / Empty / NotEmpty / Regex</summary>
+    public string Operator { get; set; } = "Equals";
+    /// <summary>比較する値（In / NotIn は Values を使う）</summary>
+    public string Value { get; set; } = "";
+    public List<string> Values { get; set; } = new();
+
+    public bool IsMatch(string cell)
+    {
+        cell = (cell ?? "").Trim();
+        return Operator.ToLowerInvariant() switch
+        {
+            "equals"      => cell == Value,
+            "notequals"   => cell != Value,
+            "contains"    => cell.Contains(Value),
+            "notcontains" => !cell.Contains(Value),
+            "in"          => Values.Contains(cell),
+            "notin"       => !Values.Contains(cell),
+            "empty"       => cell.Length == 0,
+            "notempty"    => cell.Length > 0,
+            "regex"       => System.Text.RegularExpressions.Regex.IsMatch(cell, Value),
+            _ => throw new InvalidOperationException($"RowFilters の Operator「{Operator}」は使えません。"),
+        };
+    }
 }
 
 /// <summary>見出し付きの表データ</summary>
@@ -117,9 +152,12 @@ internal static class Program
         var source = ReadExcel(excelPath, s.SheetName, s.HeaderRow);
 
         // ② 必要な列だけに加工する
-        var trimmed = SelectColumns(source, s.OutputColumns);
+        // ③ 必要な行だけ抜き出す（条件は元の全列で判定するので、残さない列でも絞り込める）
+        var filtered = FilterRows(source, s.RowFilters);
+        Log($"行の抽出: {source.Rows.Count} 行 → {filtered.Rows.Count} 行");
+        var trimmed = SelectColumns(filtered, s.OutputColumns);
 
-        // ③ オーダー番号でファイルを分ける
+        // ④ オーダー番号でファイルを分ける
         int orderIdx = trimmed.IndexOf(s.OrderNoColumn);
         if (orderIdx < 0)
             throw new InvalidOperationException($"オーダー番号列「{s.OrderNoColumn}」が OutputColumns に含まれていません。");
@@ -135,7 +173,7 @@ internal static class Program
             string order = g.Key;
             string folder = Path.Combine(s.OrderRootFolder, SanitizeFileName(order));
 
-            // ④ オーダー別フォルダに移動する
+            // ⑤ オーダー別フォルダに移動する
             if (!Directory.Exists(folder))
             {
                 if (!s.CreateOrderFolderIfMissing)
@@ -151,18 +189,23 @@ internal static class Program
             part.Header.AddRange(trimmed.Header);
             part.Rows.AddRange(g);
 
-            if (!string.IsNullOrWhiteSpace(s.SplitFileNameFormat))
-            {
-                string splitName = s.SplitFileNameFormat
-                    .Replace("{order}", SanitizeFileName(order))
-                    .Replace("{timestamp}", timestamp);
-                WriteCsv(Path.Combine(folder, splitName), part, enc);
-            }
+            string splitName = s.SplitFileNameFormat
+                .Replace("{order}", SanitizeFileName(order))
+                .Replace("{timestamp}", timestamp);
+            string splitPath = Path.Combine(folder, splitName);
+            WriteCsv(splitPath, part, enc);
 
-            // ⑤ 入荷予定ファイルにマージする
+            // ⑥ 入荷予定ファイルにマージする
             string planPath = Path.Combine(folder, s.PlanFileName);
             var (added, updated) = MergeIntoPlan(planPath, part, s, enc);
             Log($"オーダー {order}: 追加 {added} 行 / 上書き {updated} 行");
+
+            // ⑦ マージに使った新しいファイルをオールドフォルダに移動する
+            string oldFolder = Path.IsPathRooted(s.OldFolder)
+                ? Path.Combine(s.OldFolder, SanitizeFileName(order))
+                : Path.Combine(folder, s.OldFolder);
+            Directory.CreateDirectory(oldFolder);
+            File.Move(splitPath, Path.Combine(oldFolder, splitName), overwrite: true);
         }
     }
 
@@ -195,6 +238,29 @@ internal static class Program
             table.Rows.Add(row);
         }
         return table;
+    }
+
+    private static Table FilterRows(Table src, List<RowFilter> filters)
+    {
+        if (filters.Count == 0) return src;
+
+        var idx = filters.Select(f =>
+        {
+            int i = src.IndexOf(f.Column);
+            if (i < 0) throw new InvalidOperationException($"抽出条件の列「{f.Column}」がExcelに見つかりません。");
+            return i;
+        }).ToArray();
+
+        var dst = new Table();
+        dst.Header.AddRange(src.Header);
+        foreach (var row in src.Rows)
+        {
+            bool ok = true;
+            for (int k = 0; k < filters.Count && ok; k++)
+                ok = filters[k].IsMatch(idx[k] < row.Count ? row[idx[k]] : "");
+            if (ok) dst.Rows.Add(row);
+        }
+        return dst;
     }
 
     private static Table SelectColumns(Table src, List<string> columns)

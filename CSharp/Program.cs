@@ -366,13 +366,10 @@ internal static class Program
                 for (int c = 0; c < row.Count; c++)
                     if (map[c] < 0) row[c] = old[c];
 
-                // 内容が変わったときだけ上書きして最終更新日を更新する
-                if (!old.SequenceEqual(row))
-                {
-                    row[lastUpdatedIdx] = now;
-                    plan.Rows[existing] = row;
-                    updated++;
-                }
+                // 内容が同じでも上書きし、最終更新日を更新する
+                row[lastUpdatedIdx] = now;
+                plan.Rows[existing] = row;
+                updated++;
             }
             else
             {

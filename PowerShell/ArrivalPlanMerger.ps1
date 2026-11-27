@@ -8,7 +8,7 @@
   4. オーダー番号でファイルを分ける
   5. オーダー別フォルダに移動する
   6. 各フォルダの入荷予定ファイル（Excel）に新しい内容をマージする
-     （キー列が同じ行があれば上書き、無ければ追加。追加・変更した行は最終更新日を現在時刻にする）
+     （キー列が同じ行があれば上書き、無ければ追加。追加・上書きした行は最終更新日を現在時刻にする）
   7. マージに使った新しいファイルをオールドフォルダに移動する
 
   動作環境: Windows PowerShell 5.1 / Excel がインストールされていること
@@ -52,7 +52,7 @@ $Config = @{
     PlanFileName     = '入荷予定.xlsx'
     # 入荷予定ファイルを新規作成するときのシート名
     PlanSheetName    = '入荷予定'
-    # 最後の列に追加する最終更新日（行を追加・変更したときに現在時刻を入れる）
+    # 最後の列に追加する最終更新日（行を追加・上書きしたときに現在時刻を入れる）
     LastUpdatedColumn = '最終更新日'
     LastUpdatedFormat = 'yyyy/MM/dd HH:mm:ss'
     # 同じ行とみなす列（@() なら全列一致で判定）
@@ -336,13 +336,11 @@ function Merge-Plan([string]$PlanPath, $NewRows) {
         $key = Get-RowKey $n $keyCols
 
         if ($index.ContainsKey($key)) {
-            # 内容が変わったときだけ上書きして最終更新日を更新する（新しいファイルに無い列は元の値を残す）
+            # 内容が同じでも上書きし、最終更新日を更新する（新しいファイルに無い列は元の値を残す）
             $old = $planRows[$index[$key]]
-            $changed = $false
-            foreach ($c in $copyCols) {
-                if ([string]$old.$c -cne [string]$n.$c) { $old.$c = $n.$c; $changed = $true }
-            }
-            if ($changed) { $old.$lastCol = $now; $updated++ }
+            foreach ($c in $copyCols) { $old.$c = $n.$c }
+            $old.$lastCol = $now
+            $updated++
         }
         else {
             # 追加（入荷予定ファイルの列順に合わせる）
